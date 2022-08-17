@@ -4,8 +4,10 @@ import bio_util as util
 
 SPECIES_CACHE_FILE = 'species_cache.txt'
 
-def centralise_peptides(in_csv_path, out_path_root, align_path=None, half_width=7, pad_chr='-', id_col=0, pep_seq_col=4, sep=','):
-                        
+def centralise_peptides(in_csv_path, out_path_root, align_path=None, half_width=7,
+                        pad_chr='-', id_col=0, pep_seq_col=4, num_ortho=5, sep=','):
+  
+  num_ortho = max(num_ortho, 1)                   
   pep_sites = defaultdict(list)
   
   alt_ids = util.get_uniprot_alt_ids()
@@ -235,36 +237,58 @@ def centralise_peptides(in_csv_path, out_path_root, align_path=None, half_width=
           d = min(len(pseq), ref_site_pos+half_width+1)
           
           aids = sorted(adict)
-          aids.remove(pid)
-          aids.insert(0, pid)
-          done = set()
-           
+          apep_dict = defaultdict(list)
+          apep_seqs = []
+          nsk = 0
+          
+          ref_aa = adict[pid][ref_site_pos]
+          check_site_aas = set('STY')
+          check_site_aas.add(ref_aa)
+          
           for aid in aids:
             aseq = adict[aid]
             asite_aa = aseq[ref_site_pos]
             
-            if asite_aa not in 'STY':
+            if asite_aa not in check_site_aas:
               #print(f' .. homolog of {pid} : {aid} aligment site {asite_aa}{ref_site_pos} not Ser, Thr or Tyr')
               continue
               
             apep_seq = aseq[c:d] # Includes gaps
-            
-            if apep_seq in done:
+            if aid == pid:
+              rpep_seq = apep_seq
+              apep_seqs.insert(0, apep_seq)
+              if apep_seq in apep_dict:
+                apep_dict[apep_seq].insert(0, pid)
+              else:
+                apep_dict[apep_seq].append(pid)
+                
+            else:
+              apep_dict[apep_seq].append(aid)
+              apep_seqs.append(apep_seq)
+          
+          n_added = 0
+          for k in range(num_ortho):
+            for apep_seq in apep_seqs:
+              j = k % len(apep_dict[apep_seq])
+              aid = apep_dict[apep_seq][j]
+              aseq = adict[aid]
+              species = species_dict[aid]
+              asite_pos = len(aseq[:ref_site_pos].replace('-','')) # Position in unaligned homologue sequence
+
+              csv_line = f'{aid},{aid},{species},{ns},{asite_aa}{asite_pos},{apep_seq}\n'
+              csv_ofo.write(csv_line)
+              n_pep += 1
+              n_added += 1
+              subseq_dict[f'{aid}_{asite_aa}{asite_pos}___{ns}|{species.split()[0]}|{n_added}'] = apep_seq
+              
+              if n_added == num_ortho:
+                break
+              
+            else:
               continue
               
-            done.add(apep_seq)
-            
-            apep_seq = apep_seq.replace('-', pad_chr)
-            
-            species = species_dict[aid]
-            
-            asite_pos = len(aseq[:ref_site_pos].replace('-','')) # Position in unaligned homologue sequence
-
-            csv_line = f'{aid},{aid},{species},{ns},{asite_aa}{asite_pos},{apep_seq}\n'
-            csv_ofo.write(csv_line)
-            subseq_dict[f'{aid}_{asite_aa}{asite_pos}___{ns}|{species.split()[0]}'] = apep_seq
-            n_pep += 1
-       
+            break
+          
         else:
           csv_line = f'{used_pid},{sub_ids.get(aid, aid)},{ns},{site},{pep_seq}\n'
           csv_ofo.write(csv_line)
@@ -285,6 +309,7 @@ def main(argv=None):
     argv = sys.argv[1:]
   
   DEFAULT_WIDTH = 7
+  DEFAULT_NUM_ORTHO = 5
   DEFAULT_ID_COL = '1'
   DEFAULT_PEP_SEQ_COL = '5'
   DEFAULT_PAD_CHR = 'X'
@@ -303,6 +328,9 @@ def main(argv=None):
   
   arg_parse.add_argument('-a', '--align-file-path', default=None, metavar='ALIGN_PATH', dest="a",
                          help=f'Optional alignment file path, in concatenated FASTA format, as output by "align_orthologues.py".')
+
+  arg_parse.add_argument('-na', metavar='NUM_ORTHO_ALIGN', default=DEFAULT_NUM_ORTHO, type=int,
+                         help=f'Number of aligned ortholgue sequences (from alignment file) to use for each peptide; to expand range of sequences used. Default: {DEFAULT_NUM_ORTHO}')
   
   arg_parse.add_argument('-w', metavar='HALF_WIDTH', default=DEFAULT_WIDTH, type=int,
                          help=f'Number of amino acid residues to add to both sides the central site to make each subsequence. Default: {DEFAULT_WIDTH}')
@@ -327,6 +355,7 @@ def main(argv=None):
   half_width    = max(0, args['w'])
   prot_id_col   = args['ci']
   pep_seq_col   = args['cp']
+  num_ortho     = args['na']
   
   if not out_path_root:
     if align_path:
@@ -353,7 +382,7 @@ def main(argv=None):
     print(f'ERROR: Protein ID and peptide subsequence columns cannot be the same')
     sys.exit(1)     
   
-  centralise_peptides(in_csv_path, out_path_root, align_path, half_width, pad_char, prot_id_col, pep_seq_col)
+  centralise_peptides(in_csv_path, out_path_root, align_path, half_width, pad_char, prot_id_col, pep_seq_col, num_ortho)
   
 
 if __name__ == "__main__":
